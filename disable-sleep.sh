@@ -18,13 +18,26 @@ fi
 ACTUAL_USER="${SUDO_USER:-$USER}"
 
 # 1. Mask systemd targets AND services
-echo "[1/5] Masking systemd sleep targets and services..."
+echo "[1/7] Masking systemd sleep targets and services..."
 systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target 2>/dev/null || true
 systemctl mask systemd-suspend.service systemd-hibernate.service systemd-hybrid-sleep.service systemd-suspend-then-hibernate.service 2>/dev/null || true
 echo "      Done."
 
-# 2. Configure logind.conf
-echo "[2/5] Configuring logind.conf..."
+# 2. Disable NVIDIA suspend/hibernate/resume services
+# CRITICAL: These services write to /proc/driver/nvidia/suspend and cause GPU crashes on resume
+# They get re-enabled after every driver update - must re-run this script!
+echo "[2/7] Disabling NVIDIA power management services..."
+if systemctl list-unit-files | grep -q nvidia-suspend; then
+    systemctl disable nvidia-suspend nvidia-hibernate nvidia-resume 2>/dev/null || true
+    systemctl stop nvidia-suspend nvidia-hibernate nvidia-resume 2>/dev/null || true
+    echo "      Disabled nvidia-suspend, nvidia-hibernate, nvidia-resume"
+else
+    echo "      Skipped (NVIDIA suspend services not found)"
+fi
+echo "      Done."
+
+# 3. Configure logind.conf
+echo "[3/7] Configuring logind.conf..."
 LOGIND_CONF="/etc/systemd/logind.conf"
 
 if [ ! -f "${LOGIND_CONF}.backup" ]; then
@@ -54,8 +67,8 @@ for key in "${!settings[@]}"; do
 done
 echo "      Done."
 
-# 3. GNOME user session power settings
-echo "[3/5] Configuring GNOME power settings for user '$ACTUAL_USER'..."
+# 4. GNOME user session power settings
+echo "[4/7] Configuring GNOME power settings for user '$ACTUAL_USER'..."
 if command -v gsettings &> /dev/null && [ "$ACTUAL_USER" != "root" ]; then
     sudo -u "$ACTUAL_USER" gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing' 2>/dev/null || true
     sudo -u "$ACTUAL_USER" gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0 2>/dev/null || true
@@ -70,8 +83,8 @@ else
     echo "      Skipped (gsettings not found or running as root)"
 fi
 
-# 4. GDM greeter power settings (dconf system override)
-echo "[4/5] Configuring GDM greeter anti-suspend..."
+# 5. GDM greeter power settings (dconf system override)
+echo "[5/7] Configuring GDM greeter anti-suspend..."
 mkdir -p /etc/dconf/db/gdm.d
 cat > /etc/dconf/db/gdm.d/disable-suspend.conf << 'EOF'
 [org/gnome/settings-daemon/plugins/power]
@@ -91,8 +104,8 @@ EOF
 dconf update 2>/dev/null || true
 echo "      Done."
 
-# 5. Install permanent sleep inhibitor service
-echo "[5/5] Installing nosuspend inhibitor service..."
+# 6. Install permanent sleep inhibitor service
+echo "[6/7] Installing nosuspend inhibitor service..."
 cat > /etc/systemd/system/nosuspend.service << 'EOF'
 [Unit]
 Description=Inhibit sleep/suspend permanently
@@ -112,18 +125,45 @@ systemctl daemon-reload
 systemctl enable --now nosuspend.service 2>/dev/null || true
 echo "      Done."
 
+# 7. NVIDIA driver settings (prevents GSP firmware crashes)
+# CRITICAL: Hotplug detection polling causes Xid 119/120 GSP crashes
+echo "[7/7] Configuring NVIDIA driver settings..."
+if lsmod | grep -q nvidia; then
+    NVIDIA_CONF="/etc/modprobe.d/nvidia-eyes-wide-open.conf"
+    cat > "$NVIDIA_CONF" << 'NVIDIACONF'
+# eyes-wide-open: NVIDIA stability settings
+# CRITICAL: Disable display hotplug detection - prevents GSP firmware crashes (Xid 119/120)
+# Without this, gnome-shell's connector polling can hang the GPU firmware
+options nvidia NVreg_EnableHotplugDetection=0
+# Disable dynamic power management (prevents GPU sleep/wake issues)
+options nvidia NVreg_DynamicPowerManagement=0x00
+# Preserve video memory on suspend (if suspend somehow happens)
+options nvidia NVreg_PreserveVideoMemoryAllocations=1
+NVIDIACONF
+    echo "      NVIDIA config written to $NVIDIA_CONF"
+    echo "      NOTE: Run 'sudo update-initramfs -u' and reboot to apply"
+else
+    echo "      Skipped (NVIDIA driver not loaded)"
+fi
+echo "      Done."
+
 echo ""
 echo "=== All layers configured ==="
 echo ""
 echo "Summary of what was disabled:"
 echo "  - systemd sleep/suspend/hibernate targets: MASKED"
 echo "  - systemd sleep services: MASKED"
+echo "  - NVIDIA suspend/hibernate/resume services: DISABLED"
 echo "  - logind idle/button actions: IGNORE"
 echo "  - GNOME session power management: NOTHING/DISABLED"
 echo "  - GDM greeter power management: NOTHING/DISABLED"
 echo "  - Permanent sleep inhibitor: ACTIVE"
+echo "  - NVIDIA hotplug detection: DISABLED"
 echo ""
-echo "NOTE: logind changes require a restart to fully take effect."
+echo "IMPORTANT:"
+echo "  1. Run 'sudo update-initramfs -u' to apply NVIDIA settings"
+echo "  2. Reboot for all changes to take effect"
+echo "  3. Re-run this script after NVIDIA driver updates!"
 echo ""
 read -p "Restart systemd-logind now? (will kill desktop session) [y/N] " -n 1 -r
 echo ""

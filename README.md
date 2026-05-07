@@ -10,7 +10,7 @@ The failure mode is catastrophic for headless machines: the system suspends, the
 
 ### Why It Keeps Happening
 
-There are at least **5 independent systems** that can put a Linux machine to sleep:
+There are at least **7 independent systems** that can put a Linux machine to sleep or crash the GPU:
 
 | Layer | What Controls It | Scope |
 |-------|-----------------|-------|
@@ -19,6 +19,8 @@ There are at least **5 independent systems** that can put a Linux machine to sle
 | GDM greeter | Its own gsettings/dconf power profile | Login screen (no user session) |
 | GNOME session | User's gsettings power profile | Active desktop session |
 | systemd services | `systemd-suspend.service`, etc. | Service execution |
+| **NVIDIA services** | `nvidia-suspend`, `nvidia-hibernate`, `nvidia-resume` | GPU power state |
+| **NVIDIA driver** | Hotplug detection, display polling | GPU firmware (GSP) |
 
 The critical trap: **GDM has its own power management** that runs even when no user is logged in (or when the screen is locked). You can disable everything else and GDM will still suspend the machine after 20 minutes of "inactivity" at the login screen.
 
@@ -29,6 +31,21 @@ On a machine with no native display (like the DGX Spark):
 - If networking suspends, the machine is a brick until physically power-cycled
 - HDMI being disconnected can trigger the system to think "no display = idle"
 - The GNOME display server (Wayland/Xwayland) crashing can cascade into suspend
+
+### NVIDIA-Specific Risks (CRITICAL)
+
+NVIDIA GPUs have their own firmware (GSP - GPU System Processor) that can crash independently:
+
+- **Xid 119**: GSP timeout - firmware hangs waiting for RPC response (often 45+ seconds)
+- **Xid 120**: GSP task exception - firmware crash requiring full GPU reset
+- **Xid 154**: GPU flags "Reset Required" - system must reboot
+
+**Common triggers:**
+- `nvidia-suspend`/`nvidia-hibernate` services interacting with `/proc/driver/nvidia/suspend`
+- Display hotplug detection polling (gnome-shell calling `nv_drm_connector_detect`)
+- DPMS/screen blanking triggering display mode changes
+
+When the GPU crashes, the **entire system becomes unresponsive** - including SSH. This is NOT a suspend, but looks like one from the outside.
 
 ---
 
@@ -56,7 +73,24 @@ systemctl status systemd-suspend.service
 
 This is the nuclear option — even if some other component calls `systemctl suspend`, it will fail.
 
-### 2. logind.conf — Disable Idle/Button Triggers
+### 2. Disable NVIDIA Suspend Services (CRITICAL)
+
+NVIDIA ships systemd services that interact with `/proc/driver/nvidia/suspend` during power state transitions. These cause GPU crashes and black screens.
+
+```bash
+sudo systemctl disable nvidia-suspend nvidia-hibernate nvidia-resume
+sudo systemctl stop nvidia-suspend nvidia-hibernate nvidia-resume
+```
+
+**WARNING:** NVIDIA driver updates re-enable these services. You must re-run this after every driver update.
+
+Verification:
+```bash
+systemctl is-enabled nvidia-suspend nvidia-hibernate nvidia-resume
+# All should show "disabled"
+```
+
+### 3. logind.conf — Disable Idle/Button Triggers
 
 Edit `/etc/systemd/logind.conf`:
 
@@ -76,7 +110,7 @@ sudo systemctl restart systemd-logind
 
 **Warning:** Restarting logind kills active desktop sessions. Do this over SSH or before starting jobs.
 
-### 3. GNOME User Session — Power Management
+### 4. GNOME User Session — Power Management
 
 ```bash
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
@@ -86,7 +120,7 @@ gsettings set org.gnome.settings-daemon.plugins.power lid-close-ac-action 'nothi
 gsettings set org.gnome.desktop.session idle-delay 0
 ```
 
-### 4. GDM Greeter — The Hidden Culprit
+### 5. GDM Greeter — The Hidden Culprit
 
 GDM runs its own GNOME session with its own power settings. The user-level gsettings have NO effect on it. Must use dconf system override:
 
@@ -102,13 +136,42 @@ Apply:
 sudo dconf update
 ```
 
-### 5. Screen Blanking / DPMS (Prevents Idle Cascade)
+### 6. Screen Blanking / DPMS (Prevents Idle Cascade)
 
 Sometimes display blanking triggers the system to think it's idle, cascading into suspend:
 
 ```bash
 gsettings set org.gnome.desktop.screensaver lock-enabled false
 gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
+```
+
+### 7. NVIDIA Driver Settings (CRITICAL - Prevents GPU Crashes)
+
+Create `/etc/modprobe.d/nvidia-eyes-wide-open.conf`:
+
+```
+# CRITICAL: Disable display hotplug detection
+# Without this, gnome-shell connector polling causes GSP firmware crashes (Xid 119/120)
+options nvidia NVreg_EnableHotplugDetection=0
+
+# Disable dynamic power management
+options nvidia NVreg_DynamicPowerManagement=0x00
+
+# Preserve video memory on suspend
+options nvidia NVreg_PreserveVideoMemoryAllocations=1
+```
+
+Apply:
+```bash
+sudo update-initramfs -u
+sudo reboot
+```
+
+Verification:
+```bash
+cat /proc/driver/nvidia/params | grep -E "EnableHotplug|DynamicPower"
+# EnableHotplugDetection: 0
+# DynamicPowerManagement: 0
 ```
 
 ---
