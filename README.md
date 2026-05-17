@@ -1,205 +1,251 @@
-# Linux Idle Freeze Guard
+# JMS567 USB-SATA Controller Troubleshooting Guide
 
-**You leave your Linux machine idle, walk away, and come back to a completely frozen display. Mouse won't move. Keyboard does nothing. The only option is holding the power button.**
+## Overview
 
-Or worse: the display looks fine — clock is ticking, animations still running — but keyboard and mouse input is completely dead. The system isn't frozen, it just stopped listening.
+This guide documents troubleshooting steps for JMicron JMS567 USB-to-SATA bridge controllers that report incorrect drive capacities or fail to mount properly on Linux systems.
 
-This project exists because of those exact problems. They happen on Linux systems with NVIDIA GPUs — particularly laptops with hybrid graphics — and are caused by the GPU failing to wake up after idle, or by `systemd-logind` failing to restore input device access after a suspend/resume cycle.
+## Problem Symptoms
 
-## The Root Cause: D3cold
+### 1. Incorrect Capacity Reporting
+- Drive shows impossibly large size (e.g., 115.5P instead of 22TB)
+- `lsblk` shows capacity in petabytes
+- Kernel messages show: `Very big device. Trying to use READ CAPACITY(16)`
+- Reported sector count is corrupted (e.g., `253879390758630` which is `0xE6E6E6E6E6E6` in hex)
 
-When your system sits idle, Linux power management transitions the NVIDIA GPU into **D3cold** — the deepest PCI power state, where the chip is completely powered off. The problem is that the proprietary NVIDIA driver cannot reliably bring the GPU back from D3cold. When something tries to wake the display, the driver fails, the display server hangs waiting for a GPU that won't respond, and your entire graphical session is frozen.
+### 2. Input/Output Errors
+- Cannot read directory contents
+- `ls: reading directory '.': Input/output error`
+- Kernel logs show: `attempt to access beyond end of device`
 
-Notably, this **never happens while the GPU is busy** (e.g. during a long-running compute job). It only happens when the machine goes idle and the GPU has nothing to do.
+### 3. Filesystem Corruption After Improper Shutdown
+- exFAT boot sector mismatch
+- `boot region is corrupted` messages from fsck.exfat
+- Drive was working fine until system crashed/rebooted with drive attached
 
-The fix is a single udev rule that prevents the GPU from entering D3cold:
+## Common Causes
 
-```bash
-# /etc/udev/rules.d/80-nvidia-pm.rules
-ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", ATTR{power/control}="on"
-ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", ATTR{d3cold_allowed}="0"
-```
+1. **Hardware failure in JMS567 USB bridge chip** - The controller itself has failed or firmware is corrupted
+2. **Improper shutdown while drive was mounted** - Corrupts exFAT boot sectors
+3. **Known JMS567 firmware bug** - Reports incorrect capacity via READ CAPACITY(16)
+4. **Multiple controllers in multi-bay enclosures** - Some bays may have failed controllers while others work
 
-## The Other Root Cause: Input Loss After Suspend
+## Diagnostic Steps
 
-There is a second, subtler failure mode. The system suspends (even briefly via s2idle), and when it wakes, the display comes back fine — the GPU recovers — but **keyboard and mouse input is dead**. The display keeps rendering, apps keep running, voice-to-text still works, but hardware input devices are gone.
-
-This happens because `systemd-logind` manages input device file descriptors for the X session. During suspend, logind pauses all input devices. On resume, it's supposed to hand them back. With the NVIDIA proprietary driver on X11, this handoff sometimes fails silently. The kernel sees the USB devices as connected, but the X server never gets the file descriptors back.
-
-This is especially common on **laptops running with the lid closed and an external monitor**, because:
-- `HandleLidSwitchExternalPower` defaults to `suspend` — closing the lid triggers suspend even on AC power
-- The GDM greeter has its **own** power settings that can independently suspend the system after idle
-- When `systemd-logind` is restarted (e.g. by a script), it revokes all input device access from the running X session
-
-The fix is to disable all suspend triggers at every layer, including the often-overlooked GDM greeter settings and the `HandleLidSwitchExternalPower` logind option.
-
-This project wraps both fixes with diagnostics, additional defensive layers, monitoring, and recovery tools.
-
-## Quick Start
+### Check Drive Detection
 
 ```bash
-git clone https://github.com/olympus-terminal/linux-idle-freeze-guard.git
-cd linux-idle-freeze-guard
+# Check if drive is detected and what size it reports
+lsblk
 
-# Step 1: Diagnose (checks D3cold status, GPU, power settings, logs)
-./scripts/diagnose.sh
+# Check USB device information
+lsusb | grep JMicron
+dmesg | grep -i "usb" | tail -30
 
-# Step 2: Apply all fixes (D3cold + sleep/suspend/DPMS layers)
-sudo ./scripts/fix.sh
-
-# Step 3 (optional): Monitor for regressions after package updates
-sudo ./scripts/install-monitor.sh
+# Check for capacity errors
+dmesg | grep "READ CAPACITY"
 ```
 
-## What's In the Box
+### Identify Controller Issues
 
-| Script | What it does |
-|---|---|
-| `scripts/diagnose.sh` | Checks D3cold state, GPU hardware, drivers, power settings, and system logs |
-| `scripts/fix.sh` | Disables D3cold (primary) + idle suspend/sleep at every level (defensive) |
-| `scripts/recover.sh` | Restart the display manager from TTY without rebooting |
-| `scripts/install-monitor.sh` | Systemd timer + package hooks to auto-repair if settings get reverted |
-| `scripts/uninstall.sh` | Clean removal of all modifications |
+Look for these patterns in `dmesg`:
 
-## How the Fix Works
+```
+# Hardware failure pattern - repeated 0xE6 bytes
+sd 0:0:0:0: [sda] 253879390758630 512-byte logical blocks: (130 PB/115 PiB)
 
-The fix operates at multiple layers. **Layer 0 is the one that actually solves the display freeze.** Layers 1-6 are defense-in-depth to prevent the system from even attempting to trigger the GPU power transition or suspend cycle that causes input loss.
+# Quirk being applied
+usb-storage 4-3:1.0: Quirks match for vid 152d pid 0567: 5000000
 
-### Layer 0: D3cold (the actual fix)
-
-A udev rule that fires when the NVIDIA GPU is added to the PCI bus:
-- Sets `d3cold_allowed=0` — prevents the GPU from entering the deepest PCI power state
-- Sets `power/control=on` — keeps the GPU powered at all times
-
-This is applied via `/etc/udev/rules.d/80-nvidia-pm.rules` and survives reboots. The fix script also applies it immediately to the running system.
-
-### Layer 1: Systemd Targets
-
-Masks `sleep.target`, `suspend.target`, `hibernate.target`, and `hybrid-sleep.target` so the kernel cannot enter sleep states at all.
-
-### Layer 2: Logind Configuration
-
-Drop-in config at `/etc/systemd/logind.conf.d/freeze-guard.conf`:
-- `HandleLidSwitch=ignore` (and all variants including `HandleLidSwitchExternalPower` and `HandleLidSwitchDocked`)
-- `HandleSuspendKey=ignore` (and all power/hibernate key variants)
-- `IdleAction=ignore`
-
-**Important:** `HandleLidSwitchExternalPower` defaults to `suspend` even when `HandleLidSwitch` is set to `ignore`. This catches laptops running with the lid closed on AC power with an external monitor.
-
-### Layer 3: GDM Greeter Power Settings
-
-GDM runs its own GNOME session on the login screen with **independent power settings**. By default, GDM will suspend the system after 20 minutes of idle at the login screen. This is a common source of "the settings keep reverting" reports — GDM's settings are separate from the user's.
-
-Fixed via:
-- `/etc/dconf/db/gdm.d/` system override with sleep disabled
-- Direct dconf database update for the gdm user
-
-### Layer 4: Desktop Environment (GNOME/KDE)
-
-System-level dconf overrides with **locks** so package updates and GUI settings cannot re-enable sleep:
-- Sleep on AC/battery: disabled
-- Screen idle timeout: disabled
-- Screensaver: disabled
-- Lid close action: nothing
-
-### Layer 5: DPMS (Display Power Management)
-
-Xorg config to disable DPMS entirely — prevents the display from being powered off by X11.
-
-### Layer 6: NVIDIA Persistence
-
-Enables `nvidia-persistenced` to keep the GPU initialized even when no display client is active.
-
-## The Evolution
-
-This project evolved through three phases of debugging:
-
-1. **[eyes-wide-open](https://github.com/olympus-terminal/eyes-wide-open)** (archived) — First attempt. Disabled sleep/suspend at the systemd, logind, and GNOME levels. Helped reduce frequency but didn't eliminate freezes because the GPU could still enter D3cold via other paths.
-
-2. **linux-idle-freeze-guard v1** — Added more layers: dconf locks, DPMS override, nvidia-persistenced, regression monitoring. More robust but still treating symptoms.
-
-3. **D3cold discovery** — Found that the GPU entering D3cold (PCI deep sleep) was the actual root cause. A single udev rule disabling D3cold eliminated the freezes entirely. The other layers remain as defense-in-depth.
-
-## Who Is Affected?
-
-Primarily systems with:
-- NVIDIA GPUs (discrete or hybrid Intel/NVIDIA, AMD/NVIDIA)
-- Proprietary NVIDIA drivers (nouveau is generally not affected)
-- Linux kernels that support runtime PM and D3cold for PCI devices
-- Laptops are highest risk (hybrid GPU + lid switch + aggressive power management)
-
-## Recovery
-
-If your display is frozen right now:
-
-1. Press `Ctrl+Alt+F4` to switch to a text console (try F3-F6 if F4 doesn't work)
-2. Log in with your username and password
-3. Run: `sudo systemctl restart gdm` (or `sddm` / `lightdm`)
-4. Press `Ctrl+Alt+F1` or `Ctrl+Alt+F2` to switch back to the graphical session
-
-Or use the recovery script:
-```bash
-./scripts/recover.sh
+# I/O errors
+attempt to access beyond end of device
 ```
 
-**Note:** GUI app unsaved work is lost, but terminal sessions, tmux/screen, background processes, and SSH connections survive.
+## Solutions
 
-### Laptop with lid closed (external monitor only)
+### Solution 1: Try a Different Port/Slot (RECOMMENDED FIRST)
 
-If you run your laptop with the lid closed and an external monitor, `Ctrl+Alt+F4` switches to a TTY on the **laptop's built-in display**, which you can't see. To recover:
+If you have a multi-bay enclosure:
 
-1. **Open the laptop lid** to see the TTY on the built-in screen
-2. Log in and run: `sudo systemctl restart gdm`
-3. Close the lid again once the desktop is back on the external monitor
+1. **Unplug the external drive**
+2. **Move drive to a different bay/slot** in the enclosure
+3. **Plug back in and check:**
+   ```bash
+   lsblk
+   dmesg | tail -30
+   ```
+4. If size now shows correctly (e.g., 21.8T instead of 115.5P), the original slot has a failed controller
 
-Alternative if you have SSH access from another device:
-```bash
-ssh user@your-machine
-sudo systemctl restart gdm
-```
+**This is the quickest fix and often works immediately.**
 
-### Input-only freeze (Type 3)
+### Solution 2: Apply USB Storage Quirks
 
-If the display is still updating (e.g. clock changes, animations play) but keyboard and mouse do nothing:
-
-1. **Voice-to-text still works** — if you have a speech input app focused on a terminal, you can type commands through it
-2. `Ctrl+Alt+F4` may still work because VT switching is handled by the kernel, not X
-3. If on a laptop with lid closed, open the lid to access the TTY
-
-## Supported Distributions
-
-| Distro | Desktop | Status |
-|---|---|---|
-| Ubuntu 22.04+ | GNOME | Fully supported |
-| Ubuntu 24.04+ | GNOME | Fully supported |
-| Fedora 38+ | GNOME | Supported |
-| Arch Linux | GNOME | Supported |
-| Linux Mint | Cinnamon | Supported |
-| KDE (any distro) | KDE Plasma | Supported |
-
-## Verification
-
-After applying the fix:
+If the controller needs help but isn't completely dead:
 
 ```bash
-# Check D3cold is disabled (should show 0)
-cat /sys/bus/pci/devices/0000:01:00.0/d3cold_allowed
+# Unplug drive first
 
-# Check udev rule exists
-cat /etc/udev/rules.d/80-nvidia-pm.rules
+# Try capacity fix quirk
+sudo modprobe -r uas usb_storage
+sudo modprobe usb_storage quirks=152d:0567:c
 
-# Run full diagnostics
-./scripts/diagnose.sh
+# Plug drive back in
+lsblk
 ```
+
+Common quirk flags for JMS567:
+- `c` - Use READ CAPACITY(10) instead of (16)
+- `u` - Ignore device capacity, recalculate
+- `0x00000010` - US_FL_CAPACITY_OK flag
+
+### Solution 3: Fix exFAT Boot Sector Corruption
+
+If the drive is detected with correct size but won't mount or shows corruption:
+
+#### Step 1: Try fsck
+
+```bash
+# Unmount if mounted
+sudo umount /dev/sda
+
+# Run filesystem check
+sudo fsck.exfat -y /dev/sda
+```
+
+#### Step 2: Use TestDisk if Boot Sectors Don't Match
+
+```bash
+sudo testdisk /dev/sda
+```
+
+In TestDisk:
+1. Select "No Log" or "Create"
+2. Select the disk
+3. Choose "None" for partition table type
+4. Choose "Advanced"
+5. Select the partition
+6. Choose "Boot" to analyze boot sector
+7. If it shows "Sectors are not identical", TestDisk can sync them
+8. Look for "Backup BS" or similar option to synchronize
+9. Press 'Q' to quit when done
+
+#### Step 3: Mount and Verify
+
+```bash
+sudo mkdir -p /media/drn/External
+sudo mount /dev/sda /media/drn/External
+ls -la /media/drn/External
+```
+
+### Solution 4: Remove the Drive from Enclosure
+
+If all else fails:
+
+1. Open the USB enclosure
+2. Connect the drive directly via SATA, or
+3. Use a different USB-SATA adapter/enclosure
+
+The actual hard drive is likely fine - the USB bridge controller has failed.
+
+## Important Notes
+
+### About Quirks and Rebooting
+
+**WARNING:** Do not reboot with external drive plugged in when using custom quirks. This can cause:
+- GRUB authentication issues
+- Kernel boot problems
+- Further filesystem corruption
+
+**Best practice:**
+1. Always safely eject: `sudo umount /dev/sdX`
+2. Unplug drive before rebooting
+3. Plug drive back in after system is fully booted
+
+### Device Name Changes
+
+When you switch slots in a multi-bay enclosure, the device name may change:
+- `/dev/sda` → `/dev/sdb`
+- Mount point may change: `/media/drn/External` → `/media/drn/External1`
+
+**Always check `lsblk` to see the current device name.**
+
+### Clean Up Stale Mounts
+
+If you get I/O errors but the drive is working:
+
+```bash
+# Check all mounts
+mount | grep sd
+
+# Unmount the old broken mount
+sudo umount /media/drn/External
+
+# Use the new correct mount point
+cd /media/drn/External1
+```
+
+## JMS567 Controller Information
+
+**Vendor ID:** 152d (JMicron Technology Corp.)
+**Product ID:** 0567 (JMS567 SATA 6Gb/s bridge)
+**Common in:** USB 3.0 external hard drive enclosures
+
+**Known Issues:**
+- Firmware bug returning `0xE6E6E6E6E6E6` as capacity
+- READ CAPACITY(16) returns incorrect values
+- Some units fail completely while others in same enclosure work
+
+**Better Alternatives:**
+- ASMedia ASM1351/ASM1352
+- JMicron JMS578 (newer, more reliable)
+
+## Troubleshooting Checklist
+
+- [ ] Check if drive size looks correct in `lsblk`
+- [ ] If size is wrong (petabytes), try different slot/port
+- [ ] If still wrong, apply USB quirks
+- [ ] If size is correct but won't mount, run `fsck.exfat`
+- [ ] If fsck fails, use TestDisk to repair boot sectors
+- [ ] Check for device name changes (`sda` vs `sdb`)
+- [ ] Verify mount point is correct
+- [ ] Clean up any stale mounts
+- [ ] Always safely eject before unplugging
+
+## Prevention
+
+1. **Always safely eject drives:**
+   ```bash
+   sudo umount /dev/sdX
+   # Wait for command to complete
+   # Then unplug
+   ```
+
+2. **Don't reboot with external drives attached** (especially with quirks loaded)
+
+3. **Use UPS or backup power** to prevent improper shutdowns
+
+4. **Label good/bad slots** in multi-bay enclosures
+
+5. **Consider replacing enclosures** with known-bad JMS567 controllers
+
+## Recovery Success Story
+
+This guide was created after successfully recovering a 22TB exFAT drive that:
+- Initially showed as 115.5P (corrupted JMS567 controller)
+- Had boot sector corruption from improper shutdown
+- Was fixed by moving to different slot in same enclosure
+- Required TestDisk to sync boot sectors
+- All 4.1TB of data recovered successfully
+
+## Additional Resources
+
+- [Linux USB Storage Quirks Documentation](https://www.kernel.org/doc/html/latest/usb/storage.html)
+- [TestDisk Documentation](https://www.cgsecurity.org/wiki/TestDisk)
+- [exFAT Filesystem Utilities](https://github.com/exfatprogs/exfatprogs)
 
 ## Contributing
 
-If you've experienced this issue on a distribution or hardware not listed above, please open an issue with:
-- Your distro and version
-- Desktop environment
-- NVIDIA driver version (`nvidia-smi`)
-- Output of `./scripts/diagnose.sh`
+If you've encountered similar issues or have additional solutions, please open an issue or pull request.
 
 ## License
 
-MIT
+MIT License - Feel free to use and adapt this guide.
