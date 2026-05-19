@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.png" alt="eyes-wide-open banner" width="100%">
+</p>
+
 # JMS567 USB-SATA Controller Troubleshooting Guide
 
 ## Overview
