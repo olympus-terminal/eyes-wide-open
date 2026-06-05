@@ -250,6 +250,36 @@ This guide was created after successfully recovering a 22TB exFAT drive that:
 
 If you've encountered similar issues or have additional solutions, please open an issue or pull request.
 
+---
+
+## Android: Disable Safe Volume Auto-Reduction
+
+Android (including Honor MagicOS) silently reduces media volume after prolonged listening and nags with "high volume may damage hearing" warnings. The `disable-safe-volume.sh` script kills this via ADB.
+
+### Requirements
+- Android device with USB debugging enabled
+- Device authorized for ADB (`adb devices` shows "device", not "unauthorized")
+- `adb` installed on the host machine
+
+### Usage
+
+```bash
+./disable-safe-volume.sh
+```
+
+### What It Does
+
+Sets these Android settings to 0 (disabled):
+
+| Setting | Namespace | Effect |
+|---------|-----------|--------|
+| `audio_safe_volume_state` | global | Disables speaker safe volume enforcement |
+| `audio_safe_volume_state_bt` | global | Disables Bluetooth safe volume enforcement |
+| `audio_safe_volume_state_wired` | global | Disables wired headphone safe volume enforcement |
+| `unsafe_volume_music_active_ms` | secure | Resets the "unsafe listening time" counter |
+
+**Note:** Factory resets and major OS updates may re-enable these settings. Re-run the script if volume starts auto-reducing again.
+
 ## License
 
 MIT License - Feel free to use and adapt this guide.
