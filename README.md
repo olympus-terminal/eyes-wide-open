@@ -4,7 +4,7 @@
 
 # eyes-wide-open
 
-Scripts and guides for disabling the nanny features that override your choices. If you told your system to do something, it should do it — not silently undo it because a default somewhere decided it knows better.
+Scripts and guides for disabling the nanny features that override a sensible modus operandi. If you told your system to do something, it should do it — not silently undo it because a default somewhere decided it knows better.
 
 ## What's Here
 
