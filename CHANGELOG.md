@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-06-26
+
+### HDMI EDID Compositor Freeze — Documentation + Fix Script
+
+**Problem:** NVIDIA driver intermittently fails to read EDID over HDMI from Samsung LC49G95T ultrawide. Usually harmless, but occasionally wedges gnome-shell/mutter — desktop freezes while cursor still moves.
+
+**Distinct from the Xid 119/120 GSP crash** (2026-05-07): the GSP crash kills the GPU entirely and requires a reboot. The EDID compositor freeze leaves the system alive — recovery is `Ctrl+Alt+F4` then `sudo systemctl restart display-manager`.
+
+**Added:**
+- `docs/hdmi-edid-compositor-freeze.md` — full writeup: symptoms, recovery, three mitigation options, incident log
+- `scripts/fix-hdmi-edid.sh` — captures a known-good EDID and configures the NVIDIA driver to use the static copy instead of polling the monitor
+
+**Incidents logged:**
+| Date | Event |
+|------|-------|
+| 2026-06-21 | Nemo segfault from null deref during EDID/hotplug event |
+| 2026-06-24 | Full compositor freeze, recovered via TTY + display-manager restart |
+
+---
+
 ## 2026-05-07
 
 ### CRITICAL: NVIDIA GSP Crash (Xid 119/120) - System Rebooted Overnight

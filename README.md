@@ -20,6 +20,14 @@ Prevents Linux workstations from suspending during long-running jobs — covers 
 | `diagnose.sh` | Top-level diagnostic for suspend and sleep issues |
 | `verify.sh` | Verification checklist — confirms all fixes are active |
 
+### Linux: HDMI EDID Compositor Freeze
+
+NVIDIA HDMI connections can suffer intermittent EDID read failures that wedge the compositor (desktop freezes, cursor still moves). Full writeup in [`docs/hdmi-edid-compositor-freeze.md`](docs/hdmi-edid-compositor-freeze.md).
+
+| Script | What It Does |
+|--------|-------------|
+| `scripts/fix-hdmi-edid.sh` | Captures a static EDID and configures the NVIDIA driver to skip monitor polling |
+
 ### Linux: Idle Freeze Guard (`scripts/`)
 
 Targeted at NVIDIA GPU systems where idle causes display freezes (Xid 119/120 GSP firmware crashes).
