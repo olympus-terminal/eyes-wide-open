@@ -238,7 +238,6 @@ sleep-inactive-battery-type='nothing'
 
 [org/gnome/desktop/screensaver]
 idle-activation-enabled=false
-lock-enabled=false
 
 [org/gnome/desktop/session]
 idle-delay=uint32 0
@@ -300,7 +299,6 @@ idle-delay=uint32 0
 
 [org/gnome/desktop/screensaver]
 idle-activation-enabled=false
-lock-enabled=false
 
 [org/gnome/settings-daemon/plugins/power]
 lid-close-ac-action='nothing'

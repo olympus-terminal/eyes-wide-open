@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-06-27
+
+### Lock Screen Disabled by Anti-Sleep Scripts — Fixed
+
+**Problem:** After running the anti-sleep/anti-suspend scripts (`disable-sleep.sh`, `fix-sleep-permanently.sh`, `kill-all-sleep.sh`, `scripts/fix.sh`), the GNOME lock screen stopped working entirely. The screen would never lock — not on idle, not on `Super+L`, not manually. This left the workstation completely unprotected when walking away.
+
+**Root Cause:** The anti-sleep scripts included `lock-enabled=false` in their GNOME dconf overrides and gsettings calls. This setting (`org.gnome.desktop.screensaver lock-enabled`) controls whether the screen *locks* — it has nothing to do with sleep or suspend. It was included by mistake, conflating "screen lock" with "screen blanking" and "idle suspend."
+
+The setting was present in five places across the codebase:
+- `disable-sleep.sh` — gsettings call and GDM dconf override
+- `fix-sleep-permanently.sh` — GDM dconf, GNOME gsettings, and the 60-second enforcement service
+- `kill-all-sleep.sh` — GDM dconf override
+- `scripts/fix.sh` — dconf system override and dconf locks
+- `scripts/install-monitor.sh` — regression checker's dconf recreation blocks
+
+**How We Found It:** The lock screen simply stopped working after running the anti-sleep stack. Bisecting the settings, `gsettings get org.gnome.desktop.screensaver lock-enabled` returned `false`, confirming the scripts had disabled it. The anti-sleep intent was to prevent idle *suspend* (the system going to sleep), not to prevent the screen from *locking* (showing a password prompt). These are independent GNOME subsystems.
+
+**Fix:** Removed all instances of `lock-enabled=false` from every script. The relevant settings for preventing sleep are `idle-activation-enabled=false` (prevents the screensaver from activating on idle), `idle-delay=0` (no idle timeout), and the `sleep-inactive-*-type='nothing'` family (prevents sleep after inactivity). None of these affect whether the lock screen works when explicitly invoked.
+
+**Verification:** After removing `lock-enabled=false` and re-running the scripts, `gsettings get org.gnome.desktop.screensaver lock-enabled` returns `true`, and `Super+L` locks the screen correctly. Sleep/suspend remains fully disabled.
+
+**Debugging scripts removed:** Three ad-hoc scripts created during the debugging process in the parent directory (`~/Documents/`) have been deleted:
+- `fix-lock-screen.sh` — re-enabled lock-enabled via gsettings + NVIDIA modprobe fixes
+- `fix-samsung-edid.sh` — attempted EDID copy (wrong approach for this issue)
+- `fix-samsung-freeze-step2.sh` — disabled GSP firmware (wrong approach for this issue)
+
+---
+
 ## 2026-06-26
 
 ### HDMI EDID Compositor Freeze — Documentation + Fix Script

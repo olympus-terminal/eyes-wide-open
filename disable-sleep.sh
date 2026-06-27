@@ -76,7 +76,6 @@ if command -v gsettings &> /dev/null && [ "$ACTUAL_USER" != "root" ]; then
     sudo -u "$ACTUAL_USER" gsettings set org.gnome.settings-daemon.plugins.power lid-close-ac-action 'nothing' 2>/dev/null || true
     sudo -u "$ACTUAL_USER" gsettings set org.gnome.settings-daemon.plugins.power lid-close-battery-action 'nothing' 2>/dev/null || true
     sudo -u "$ACTUAL_USER" gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null || true
-    sudo -u "$ACTUAL_USER" gsettings set org.gnome.desktop.screensaver lock-enabled false 2>/dev/null || true
     sudo -u "$ACTUAL_USER" gsettings set org.gnome.desktop.screensaver idle-activation-enabled false 2>/dev/null || true
     echo "      Done."
 else
@@ -97,7 +96,6 @@ sleep-inactive-battery-timeout=0
 idle-delay=uint32 0
 
 [org/gnome/desktop/screensaver]
-lock-enabled=false
 idle-activation-enabled=false
 EOF
 

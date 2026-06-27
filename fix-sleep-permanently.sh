@@ -151,7 +151,6 @@ sleep-inactive-battery-type='nothing'
 
 [org/gnome/desktop/screensaver]
 idle-activation-enabled=false
-lock-enabled=false
 
 [org/gnome/desktop/session]
 idle-delay=uint32 0
@@ -168,7 +167,6 @@ echo "--- Layer 5: GNOME user session settings ---"
 sudo -u "$REAL_USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$REAL_USER")/bus" bash -c '
 gsettings set org.gnome.desktop.session idle-delay 0
 gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
-gsettings set org.gnome.desktop.screensaver lock-enabled false
 gsettings set org.gnome.settings-daemon.plugins.power idle-dim false
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "nothing"
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
@@ -280,7 +278,6 @@ cat > "$REAL_HOME/kill-screen-blanking.sh" << 'SCRIPT'
 # GNOME settings
 gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null
 gsettings set org.gnome.desktop.screensaver idle-activation-enabled false 2>/dev/null
-gsettings set org.gnome.desktop.screensaver lock-enabled false 2>/dev/null
 gsettings set org.gnome.settings-daemon.plugins.power idle-dim false 2>/dev/null
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing' 2>/dev/null
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0 2>/dev/null
