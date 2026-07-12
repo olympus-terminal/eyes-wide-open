@@ -4,7 +4,18 @@
 
 # eyes-wide-open
 
- Scripts and guides for disabling nanny features that interrupt. If you told your system to do something, it should do it — not silently undo it because a default somewhere decided it knows better.
+> **Legacy repository:** The maintained NVIDIA freeze diagnostic and narrow
+> D3cold mitigation now live in
+> [`linux-idle-freeze-guard`](https://github.com/olympus-terminal/linux-idle-freeze-guard).
+> This repository is retained for historical scripts and migration reference.
+
+Several scripts here disable suspend, screen locking, or other power-management
+controls. Those changes can affect physical security, battery use, thermals, and
+data integrity. Review each script and its rollback path before running it; do
+not apply the broad or "nuclear" variants as a generic first step.
+
+This repository collects earlier Linux power-management and display-recovery
+experiments together with unrelated Android and storage utilities.
 
 ## What's Here
 
@@ -62,13 +73,20 @@ The JMicron JMS567 USB-to-SATA bridge has a firmware bug that reports corrupted 
 
 ## Quick Start
 
+For current NVIDIA idle-freeze diagnosis, start with the maintained successor:
+
+```bash
+git clone https://github.com/olympus-terminal/linux-idle-freeze-guard.git
+cd linux-idle-freeze-guard
+./scripts/diagnose.sh
+```
+
+If you need one of the historical utilities in this repository, clone it and
+inspect the relevant script before execution:
+
 ```bash
 git clone https://github.com/olympus-terminal/eyes-wide-open.git
 cd eyes-wide-open
-
-# Linux anti-suspend (pick one)
-sudo ./disable-sleep.sh          # comprehensive
-sudo ./kill-all-sleep.sh         # nuclear option
 
 # Android safe volume (connect phone via USB first)
 ./disable-safe-volume.sh
